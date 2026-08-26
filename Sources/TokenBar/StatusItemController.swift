@@ -2,6 +2,254 @@ import AppKit
 import SwiftUI
 import TokenBarCore
 
+enum MainStatusItemPreference {
+    static let storageKey = "tokenbar.menuBar.showMainItem"
+
+    static func isShown(defaults: UserDefaults = .standard) -> Bool {
+        defaults.object(forKey: storageKey) as? Bool ?? true
+    }
+}
+
+/// One deliberate AppKit rendering path for every individual status item. The
+/// status-bar button keeps ownership of highlighting and placement; this type
+/// owns only the icon scale and typographic hierarchy.
+@MainActor
+enum ClientStatusItemRenderer {
+    static let iconSize: CGFloat = 16
+
+    private static let titleGap = "\u{2009}"
+    fileprivate static let stackedHorizontalInset: CGFloat = 3
+    fileprivate static let stackedIconTextGap: CGFloat = 2
+    private static let stackedTextTrailingInkSafety: CGFloat = 1.5
+    private static let stackedContentIdentifier = NSUserInterfaceItemIdentifier(
+        "tokenbar.client-status.stacked-content")
+
+    struct Content {
+        let title: NSAttributedString
+        let stacked: Stacked?
+
+        var isMultiline: Bool { stacked != nil }
+    }
+
+    struct Stacked {
+        let percent: String
+        let reset: String
+        let textWidth: CGFloat
+    }
+
+    static func content(for presentation: ClientTray.Presentation) -> Content {
+        guard let reset = presentation.compactResetText else {
+            return Content(
+                title: attributed(
+                    titleGap + presentation.valueText,
+                    font: .monospacedDigitSystemFont(
+                        ofSize: NSFont.systemFontSize, weight: .semibold)),
+                stacked: nil)
+        }
+
+        switch presentation.layout {
+        case .stacked:
+            return stacked(percent: presentation.valueText, reset: reset)
+        case .inline:
+            return inline(percent: presentation.valueText, reset: reset)
+        }
+    }
+
+    static func preferredItemLength(for content: Content) -> CGFloat? {
+        guard let stacked = content.stacked else { return nil }
+        return stackedHorizontalInset * 2 + iconSize + stackedIconTextGap + stacked.textWidth
+    }
+
+    /// Applies both halves of an item presentation together. In stacked mode
+    /// the icon is intentionally hosted in a subview, so its source image must
+    /// be supplied on every update rather than inferred from button.image.
+    static func apply(_ content: Content, image: NSImage, to button: NSStatusBarButton) {
+        if content.isMultiline {
+            applyStacked(content, image: image, to: button)
+        } else {
+            removeStackedOverlay(from: button)
+            button.image = image
+            button.imagePosition = .imageLeft
+            button.imageScaling = .scaleNone
+            button.cell?.wraps = false
+            button.cell?.lineBreakMode = .byClipping
+            button.attributedTitle = content.title
+        }
+    }
+
+    /// Stacked content is an explicit AppKit layout. The button retains click,
+    /// highlighting, placement, and independent status-item reordering.
+    private static func applyStacked(
+        _ content: Content, image: NSImage, to button: NSStatusBarButton
+    ) {
+        guard let stacked = content.stacked else { return }
+        button.image = nil
+        button.imagePosition = .imageOnly
+        button.imageScaling = .scaleNone
+        button.cell?.wraps = false
+        button.cell?.lineBreakMode = .byClipping
+        button.attributedTitle = NSAttributedString()
+        button.layoutSubtreeIfNeeded()
+
+        let visual = stackedContent(in: button) ?? makeStackedContent()
+        if visual.superview == nil { button.addSubview(visual) }
+        visual.frame = button.bounds
+        visual.configure(image: image, stacked: stacked)
+        visual.layoutSubtreeIfNeeded()
+    }
+
+    private static func stackedContent(in button: NSStatusBarButton) -> ClientStatusItemStackedContentView? {
+        button.subviews.first {
+            $0.identifier == stackedContentIdentifier
+        } as? ClientStatusItemStackedContentView
+    }
+
+    private static func removeStackedOverlay(from button: NSStatusBarButton) {
+        if let visual = stackedContent(in: button) {
+            button.image = visual.providerImage
+            visual.removeFromSuperview()
+        }
+    }
+
+    /// The rendered icon is in the button for inline items and in the custom
+    /// overlay for stacked items. The overlay is authoritative while stacked
+    /// content is active, regardless of AppKit's status-button image state.
+    static func providerImage(on button: NSStatusBarButton) -> NSImage? {
+        stackedContent(in: button)?.providerImage ?? button.image
+    }
+
+    private static func makeStackedContent() -> ClientStatusItemStackedContentView {
+        let visual = ClientStatusItemStackedContentView(frame: .zero)
+        visual.identifier = stackedContentIdentifier
+        visual.autoresizingMask = [.width, .height]
+        return visual
+    }
+
+    private static func stacked(percent: String, reset: String) -> Content {
+        let percentWidth = NSAttributedString(
+            string: percent,
+            attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 10.5, weight: .semibold)]
+        ).size().width
+        let resetWidth = NSAttributedString(
+            string: reset,
+            attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 10.5, weight: .medium)]
+        ).size().width
+        return Content(
+            title: NSAttributedString(),
+            stacked: Stacked(
+                percent: percent,
+                reset: reset,
+                textWidth: ceil(max(percentWidth, resetWidth)) + stackedTextTrailingInkSafety))
+    }
+
+    private static func inline(percent: String, reset: String) -> Content {
+        let value = NSMutableAttributedString(
+            string: titleGap + percent,
+            attributes: [
+                .font: NSFont.monospacedDigitSystemFont(
+                    ofSize: NSFont.systemFontSize, weight: .semibold),
+                .foregroundColor: NSColor.labelColor,
+            ])
+        value.append(NSAttributedString(
+            string: " \u{00B7} ",
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 11.5, weight: .regular),
+                .foregroundColor: NSColor.tertiaryLabelColor,
+            ]))
+        value.append(NSAttributedString(
+            string: reset,
+            attributes: [
+                .font: NSFont.monospacedDigitSystemFont(ofSize: 11.5, weight: .regular),
+                .foregroundColor: NSColor.secondaryLabelColor,
+            ]))
+        return Content(title: value, stacked: nil)
+    }
+
+    private static func attributed(_ string: String, font: NSFont) -> NSAttributedString {
+        NSAttributedString(
+            string: string,
+            attributes: [
+                .font: font,
+                .foregroundColor: NSColor.labelColor,
+            ])
+    }
+}
+
+/// A non-interactive visual layer inside the status button. Each label is laid
+/// out from the button's actual bounds, so the two-line group is centered as a
+/// single unit instead of inheriting title-cell baselines.
+final class ClientStatusItemStackedContentView: NSView {
+    struct Geometry {
+        let icon: NSRect
+        let percent: NSRect
+        let reset: NSRect
+
+        var textBlock: NSRect { percent.union(reset) }
+        var content: NSRect { icon.union(textBlock) }
+    }
+    private static let labelHeight: CGFloat = 13
+    private static let lineAdvance: CGFloat = 9.5
+    private let icon = NSImageView()
+    private let percent = NSTextField(labelWithString: "")
+    private let reset = NSTextField(labelWithString: "")
+    private var textWidth: CGFloat = 0
+
+    override var isFlipped: Bool { true }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        icon.imageScaling = .scaleNone
+        for label in [percent, reset] {
+            label.lineBreakMode = .byClipping
+            label.maximumNumberOfLines = 1
+            label.setAccessibilityElement(false)
+            addSubview(label)
+        }
+        percent.font = .monospacedDigitSystemFont(ofSize: 10.5, weight: .semibold)
+        reset.font = .monospacedDigitSystemFont(ofSize: 10.5, weight: .medium)
+        percent.textColor = .labelColor
+        reset.textColor = .labelColor
+        icon.setAccessibilityElement(false)
+        addSubview(icon)
+        setAccessibilityElement(false)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    var providerImage: NSImage? { icon.image }
+    var geometry: Geometry {
+        Geometry(icon: icon.frame, percent: percent.frame, reset: reset.frame)
+    }
+
+    func configure(image: NSImage, stacked: ClientStatusItemRenderer.Stacked) {
+        icon.image = image
+        percent.stringValue = stacked.percent
+        reset.stringValue = stacked.reset
+        textWidth = stacked.textWidth
+        needsLayout = true
+    }
+
+    override func layout() {
+        super.layout()
+        let textX = ClientStatusItemRenderer.stackedHorizontalInset
+            + ClientStatusItemRenderer.iconSize
+            + ClientStatusItemRenderer.stackedIconTextGap
+        let textTop = (bounds.height - (Self.labelHeight + Self.lineAdvance)) / 2
+        icon.frame = NSRect(
+            x: ClientStatusItemRenderer.stackedHorizontalInset,
+            y: (bounds.height - ClientStatusItemRenderer.iconSize) / 2,
+            width: ClientStatusItemRenderer.iconSize,
+            height: ClientStatusItemRenderer.iconSize)
+        percent.frame = NSRect(
+            x: textX, y: textTop, width: textWidth, height: Self.labelHeight)
+        reset.frame = NSRect(
+            x: textX, y: textTop + Self.lineAdvance,
+            width: textWidth, height: Self.labelHeight)
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
 /// Owns the NSStatusItem and its NSPopover (AppKit-hosted icon, SwiftUI
 /// popover content — the codexbar pattern). Later phases talk to it through
 /// `updateTitle(_:)` and `showPopover()`.
@@ -17,7 +265,7 @@ final class StatusItemController: NSObject {
     private var animationSurface: StatusItemAnimationSurface?
     private var hasPresentedIcon = false
     private var clientStatusItems: [String: NSStatusItem] = [:]
-    private var lastClientPresentations: [String: ClientTray.Presentation] = [:]
+    private var clientStatusImages: [String: NSImage] = [:]
     private let routeMemory: StatusItemRouteMemory
     private var popoverAnchorIdentity: String?
 
@@ -101,6 +349,7 @@ final class StatusItemController: NSObject {
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
             animationSurface = StatusItemAnimationSurface(button: button)
         }
+        statusItem.isVisible = MainStatusItemPreference.isShown(defaults: defaults)
     }
 
     /// Supplies the latest quota payload for the right-click menu
@@ -205,6 +454,14 @@ final class StatusItemController: NSObject {
         popover.performClose(nil)
     }
 
+    func setMainItemVisible(_ isVisible: Bool) {
+        guard statusItem.isVisible != isVisible else { return }
+        if !isVisible, popoverAnchorIdentity == "main" {
+            closePopover()
+        }
+        statusItem.isVisible = isVisible
+    }
+
     private func presentPopover(from button: NSStatusBarButton, identity: String) {
         guard !popover.isShown else { return }
         // Reinstall the live PopoverView so its .task loops start fresh
@@ -241,48 +498,57 @@ final class StatusItemController: NSObject {
     func reconcileClientItems(_ presentations: [ClientTray.Presentation]) {
         let ordered = presentations.sorted { $0.clientId < $1.clientId }
         let next = Dictionary(uniqueKeysWithValues: ordered.map { ($0.clientId, $0) })
-        guard next != lastClientPresentations else { return }
 
         for id in Array(clientStatusItems.keys) where next[id] == nil {
             removeClientItem(id)
         }
-        // Only clients that actually own an item are recorded, so a client whose
-        // icon failed to render stays absent and the next pass retries it.
-        var reconciled: [String: ClientTray.Presentation] = [:]
         for presentation in ordered {
             if let item = clientStatusItems[presentation.clientId] {
-                if lastClientPresentations[presentation.clientId] != presentation {
-                    updateClientItem(item, presentation: presentation)
-                }
+                updateClientItem(item, presentation: presentation)
             } else if !createClientItem(presentation) {
                 continue
             }
-            reconciled[presentation.clientId] = presentation
         }
-        lastClientPresentations = reconciled
     }
 
     private func createClientItem(_ presentation: ClientTray.Presentation) -> Bool {
-        guard let image = AgentIconView.statusItemImage(clientId: presentation.clientId) else {
-            return false
-        }
+        guard clientImage(for: presentation.clientId) != nil else { return false }
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item.autosaveName = presentation.autosaveName
         clientStatusItems[presentation.clientId] = item
-        updateClientItem(item, presentation: presentation, image: image)
+        updateClientItem(item, presentation: presentation)
         return true
     }
 
-    private func updateClientItem(
-        _ item: NSStatusItem,
-        presentation: ClientTray.Presentation,
-        image: NSImage? = nil
-    ) {
+    /// Resolves on every reconciliation. `statusItemImage` caches its static
+    /// 1x/2x renderings, while this controller cache preserves a successfully
+    /// created shell if resource resolution ever transiently fails later.
+    private func clientImage(for clientId: String) -> NSImage? {
+        if let image = AgentIconView.statusItemImage(
+            clientId: clientId, size: ClientStatusItemRenderer.iconSize)
+        {
+            clientStatusImages[clientId] = image
+            return image
+        }
+        return clientStatusImages[clientId]
+    }
+
+    private func updateClientItem(_ item: NSStatusItem, presentation: ClientTray.Presentation) {
         guard let button = item.button else { return }
-        if let image { button.image = image }
-        button.imagePosition = .imageLeft
-        button.imageScaling = .scaleNone
-        button.title = " \(presentation.valueText)"
+        let imageBeforeUpdate = ClientStatusItemRenderer.providerImage(on: button)
+        guard let image = clientImage(for: presentation.clientId) else {
+#if DEBUG
+            print("[TokenBar DEBUG] client status item image resolution failed: client=\(presentation.clientId)")
+#endif
+            return
+        }
+        let content = ClientStatusItemRenderer.content(for: presentation)
+        // A stacked item owns an explicit icon-plus-text width so the button's
+        // image stays at the same left inset while its text subview is
+        // laid out. Inline keeps AppKit's variable title-cell sizing.
+        item.length = ClientStatusItemRenderer.preferredItemLength(for: content)
+            ?? NSStatusItem.variableLength
+        ClientStatusItemRenderer.apply(content, image: image, to: button)
         button.toolTip = presentation.toolTip
         button.setAccessibilityLabel(presentation.accessibilityLabel)
         button.setAccessibilityIdentifier(presentation.processIdentity)
@@ -290,10 +556,41 @@ final class StatusItemController: NSObject {
         button.target = self
         button.action = #selector(clientItemAction(_:))
         button.sendAction(on: [.leftMouseUp])
+#if DEBUG
+        logClientItemState(
+            item, button: button, presentation: presentation, imageBeforeUpdate: imageBeforeUpdate)
+#endif
     }
+
+#if DEBUG
+    private func logClientItemState(
+        _ item: NSStatusItem,
+        button: NSStatusBarButton,
+        presentation: ClientTray.Presentation,
+        imageBeforeUpdate: NSImage?
+    ) {
+        let imageAfterUpdate = ClientStatusItemRenderer.providerImage(on: button)
+        let imageSize = imageAfterUpdate?.size
+        let attributedTitle = button.attributedTitle.string
+        let fields = [
+            "client=\(presentation.clientId)",
+            "imageBeforeNil=\(imageBeforeUpdate == nil)",
+            "imageAfterNil=\(imageAfterUpdate == nil)",
+            "imageSize=\(String(describing: imageSize))",
+            "imagePosition=\(button.imagePosition.rawValue)",
+            "imageScaling=\(button.imageScaling.rawValue)",
+            "attributedTitle=\(String(reflecting: attributedTitle))",
+            "title=\(String(reflecting: button.title))",
+            "itemLength=\(item.length)",
+            "buttonWidth=\(button.bounds.width)",
+        ]
+        print("[TokenBar DEBUG] client status item reconciled: \(fields.joined(separator: " "))")
+    }
+#endif
 
     private func removeClientItem(_ clientId: String) {
         guard let item = clientStatusItems.removeValue(forKey: clientId) else { return }
+        clientStatusImages.removeValue(forKey: clientId)
         if popoverAnchorIdentity == ClientTray.processIdentity(for: clientId) {
             closePopover()
         }
@@ -342,7 +639,7 @@ final class StatusItemController: NSObject {
         for clientId in Array(clientStatusItems.keys) {
             removeClientItem(clientId)
         }
-        lastClientPresentations.removeAll()
+        clientStatusImages.removeAll()
         popover.contentViewController = nil
         animationSurface?.tearDown()
         animationSurface = nil

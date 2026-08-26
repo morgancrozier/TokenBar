@@ -57,12 +57,15 @@ struct SettingsPanel: View {
     var reportLoading = false
 
     @AppStorage(TrayMode.storageKey) private var trayModeRaw = TrayMode.todayTokens.rawValue
+    @AppStorage(MainStatusItemPreference.storageKey) private var showMainItem = true
     @AppStorage(TrayAnimator.animateKey) private var animateTray = true
     @AppStorage(TrayAnimator.styleKey) private var animationStyle = "cat"
     @AppStorage(IconColoring.storageKey) private var iconColoringRaw = IconColoring.warningOnly.rawValue
     @AppStorage(TrayAnimator.quotaSourceKey) private var quotaSource = QuotaResolver.auto
     @AppStorage(ClientTray.enabledKey) private var individualEnabledRaw = ""
     @AppStorage(ClientTray.selectionsKey) private var individualSelectionsRaw = "{}"
+    @AppStorage(ClientTray.layoutKey) private var individualLayoutRaw =
+        ClientTray.Layout.stacked.rawValue
     @AppStorage("tokenbar.updates.beta") private var betaUpdates = false
     /// Loaded once per panel appearance without blocking SwiftUI body creation.
     @State private var autostartEnabled = false
@@ -251,6 +254,11 @@ struct SettingsPanel: View {
 
     @ViewBuilder
     private func menuBarPage() -> some View {
+        section("Main item") {
+            toggleRow("Show main TokenBar item", isOn: $showMainItem)
+            hint("Off hides only the main item. Enabled individual items and background updates continue to work.")
+        }
+
         section("Menubar title") {
             radioGroup(
                 selection: $trayModeRaw,
@@ -293,7 +301,19 @@ struct SettingsPanel: View {
             officialClients: AgentIconView.availableOfficialClientIDs())
 
         section("Individual items") {
-            hint("Keep the main TokenBar item. Optional client items show each client's selected quota window; Auto chooses the tightest healthy window for that client.")
+            hint("Optional client items show each client's selected quota window; Auto chooses the tightest healthy window for that client.")
+            row("Layout") {
+                Picker("", selection: $individualLayoutRaw) {
+                    ForEach(ClientTray.Layout.allCases, id: \.rawValue) { layout in
+                        Text(layout.label.localized).tag(layout.rawValue)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                .controlSize(.small)
+                .frame(width: 150)
+                .accessibilityLabel("Individual item layout".localized)
+            }
             if rows.isEmpty, isLoading {
                 LoadingLine(title: "Looking for eligible clients…")
             } else if rows.isEmpty {

@@ -62,6 +62,12 @@ struct AgentIconView: View {
     }
 
     @MainActor private static var cache: [String: NSImage] = [:]
+    @MainActor private static var statusItemImageCache: [StatusItemImageKey: NSImage] = [:]
+
+    private struct StatusItemImageKey: Hashable {
+        let clientId: String
+        let size: CGFloat
+    }
 
     @MainActor private static func image(_ id: String) -> NSImage? {
         if let cached = cache[id] { return cached }
@@ -91,6 +97,8 @@ struct AgentIconView: View {
         clientId: String, size: CGFloat = 18
     ) -> NSImage? {
         guard availableOfficialClientIDs().contains(clientId) else { return nil }
+        let cacheKey = StatusItemImageKey(clientId: clientId, size: size)
+        if let cached = statusItemImageCache[cacheKey] { return cached }
         let logicalSize = NSSize(width: size, height: size)
         var representations: [NSBitmapImageRep] = []
         for scale in [CGFloat(1), CGFloat(2)] {
@@ -109,6 +117,7 @@ struct AgentIconView: View {
         representations.forEach(result.addRepresentation)
         result.isTemplate = false
         result.accessibilityDescription = ClientRegistry.style(clientId).displayName
+        statusItemImageCache[cacheKey] = result
         return result
     }
 

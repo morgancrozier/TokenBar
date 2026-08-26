@@ -498,6 +498,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let mode = TrayMode.current
         let quotaRemaining = trayAnimator?.quotaRemaining
         let rate = trayAnimator?.tokensPerMinRate ?? lastRate
+        statusController?.setMainItemVisible(MainStatusItemPreference.isShown())
         statusController?.updateTitle(
             mode.title(graph: lastGraph, tokensPerMin: rate, quotaRemaining: quotaRemaining),
             color: mode.titleColor(quotaRemaining: quotaRemaining))
@@ -508,7 +509,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             enabled: ClientTray.enabled(),
             selections: ClientTray.selections(),
             hidden: ClientRegistry.hiddenClients(),
-            officialClients: AgentIconView.availableOfficialClientIDs()))
+            officialClients: AgentIconView.availableOfficialClientIDs(),
+            layout: ClientTray.layout()))
     }
 
     /// The hidden-tabs set changed: fetch the filtered live rate once, off the

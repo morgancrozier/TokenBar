@@ -3,8 +3,9 @@ import TokenBarCore
 
 /// Process-lifetime navigation memory shared by the main item, individual
 /// items, and the popover tab bar. It deliberately stays out of UserDefaults:
-/// M2 adds only the two item preferences. The main item retains its own full
-/// route, while every client independently retains its last lens.
+/// item presentation preferences do not persist navigation. The main item
+/// retains its own full route, while every client independently retains its
+/// last lens.
 final class StatusItemRouteMemory {
     struct Route: Equatable {
         let clientId: String
@@ -86,6 +87,7 @@ final class StatusItemRouteMemory {
 enum ClientTray {
     static let enabledKey = "tokenbar.tray.clients.enabled"
     static let selectionsKey = "tokenbar.tray.clients.quotaSelections"
+    static let layoutKey = "tokenbar.tray.clients.layout"
     static let activeTabKey = "tokenbar.activeTab"
     static let activeViewKey = "tokenbar.view"
     static let overviewTab = "overview"
@@ -96,6 +98,22 @@ enum ClientTray {
     static let maxEntries = 128
     static let maxClientIDBytes = 128
     static let maxCardIDBytes = 4096
+
+    enum Layout: String, CaseIterable, Equatable, Sendable {
+        case stacked
+        case inline
+
+        var label: String {
+            switch self {
+            case .stacked: return "Stacked"
+            case .inline: return "Inline"
+            }
+        }
+    }
+
+    static func layout(defaults: UserDefaults = .standard) -> Layout {
+        defaults.string(forKey: layoutKey).flatMap(Layout.init(rawValue:)) ?? .stacked
+    }
 
     enum Status: String, Equatable, Sendable {
         case available
@@ -153,7 +171,10 @@ enum ClientTray {
         let clientId: String
         let displayName: String
         let remainingPercent: Double?
+        let resetsAt: String?
+        let compactResetText: String?
         let status: Status
+        let layout: Layout
 
         var processIdentity: String { ClientTray.processIdentity(for: clientId) }
         var autosaveName: String { ClientTray.autosaveName(for: clientId) }
@@ -181,8 +202,18 @@ enum ClientTray {
             if status == .errorExplicit,
                let percent = ClientTray.percentInt(remainingPercent)
             {
+                if let compactResetText {
+                    return "%@, %lld percent last known quota remaining, resets in %@".localized(
+                        displayName, percent, compactResetText)
+                }
                 return "%@, %lld percent last known quota remaining".localized(
                     displayName, percent)
+            }
+            if let percent = ClientTray.percentInt(remainingPercent),
+               let compactResetText
+            {
+                return "%@, %lld percent quota remaining, resets in %@".localized(
+                    displayName, percent, compactResetText)
             }
             return ClientTray.quotaAccessibilityLabel(displayName, remainingPercent)
         }
@@ -381,7 +412,9 @@ enum ClientTray {
         enabled: Set<String>,
         selections: [String: String],
         hidden: Set<String>,
-        officialClients: Set<String>
+        officialClients: Set<String>,
+        layout: Layout = .stacked,
+        now: Date = Date()
     ) -> [Presentation] {
         let present = canonicalIDs(graph?.summary.clients ?? [])
         return present
@@ -413,7 +446,10 @@ enum ClientTray {
                     clientId: clientId,
                     displayName: ClientRegistry.style(clientId).displayName,
                     remainingPercent: resolved?.remainingPercent,
-                    status: status)
+                    resetsAt: resolved?.resetsAt,
+                    compactResetText: compactResetText(resolved?.resetsAt, now: now),
+                    status: status,
+                    layout: layout)
             }
     }
 
@@ -426,6 +462,24 @@ enum ClientTray {
 
     static func percentText(_ value: Double?) -> String {
         percentInt(value).map { "\($0)%" } ?? "—%"
+    }
+
+    /// Minute-resolution countdown for the status item. The ceiling keeps a
+    /// partial final minute visible as 1m; spaces are removed only after the
+    /// existing localized duration formatter has chosen and rendered its units.
+    static func compactResetText(_ resetsAt: String?, now: Date = Date()) -> String? {
+        guard let resetsAt else { return nil }
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        guard let reset = fractional.date(from: resetsAt)
+                ?? ISO8601DateFormatter().date(from: resetsAt)
+        else { return nil }
+        let seconds = reset.timeIntervalSince(now)
+        guard seconds > 0 else { return nil }
+        let minutes = Int64(ceil(seconds / 60))
+        return Format.duration(ms: minutes * 60_000)
+            .components(separatedBy: .whitespacesAndNewlines)
+            .joined()
     }
 
     static func quotaAccessibilityLabel(_ displayName: String, _ value: Double?) -> String {

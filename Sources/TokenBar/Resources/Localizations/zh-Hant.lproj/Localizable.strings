@@ -164,6 +164,8 @@
 "%@, selected quota window unavailable" = "%@，所選的額度時間窗無法使用";
 "%@ — %lld%% last known quota remaining" = "%1$@ — 上次已知剩餘額度 %2$lld%%";
 "%@, %lld percent last known quota remaining" = "%1$@，上次已知剩餘額度 %2$lld%%";
+"%@, %lld percent quota remaining, resets in %@" = "%1$@，剩餘額度 %2$lld%%，將於 %3$@ 後重置";
+"%@, %lld percent last known quota remaining, resets in %@" = "%1$@，上次已知剩餘額度 %2$lld%%，將於 %3$@ 後重置";
 "Copy command" = "複製指令";
 "Using a Claude `setup-token`? TokenBar auto-detects `CLAUDE_CODE_OAUTH_TOKEN` from your login shell. If limits don't appear, store the token in Keychain — run this, then paste the token at the prompt:" = "使用 Claude 的 `setup-token`？TokenBar 會自動從你的登入 shell 讀取 `CLAUDE_CODE_OAUTH_TOKEN`。如果額度沒有出現，請把 token 存進鑰匙圈 —— 執行以下指令，然後在提示處貼上 token：";
 
@@ -188,11 +190,16 @@
 "%lldd ago" = "%lld 天前";
 
 /* ===== 設定：區段標題 ===== */
+"Main item" = "主要項目";
 "Menubar title" = "選單列標題";
 "Startup" = "啟動";
 "Menubar icon" = "選單列圖示";
 "Quota source" = "額度來源";
 "Individual items" = "個別項目";
+"Layout" = "版面配置";
+"Stacked" = "堆疊";
+"Inline" = "行內";
+"Individual item layout" = "個別項目版面配置";
 "No eligible individual clients yet." = "目前沒有符合資格的個別用戶端。";
 "Looking for eligible clients…" = "正在尋找符合資格的用戶端…";
 "View tabs" = "分頁";
@@ -306,10 +313,12 @@
 "Not found on disk right now — kept in the list in case it's an unmounted drive or a typo you'll fix." = "目前在磁碟上找不到 —— 仍保留在清單中，以免是尚未掛載的磁碟或待修正的筆誤。";
 
 /* ===== 設定：說明文字 ===== */
+"Show main TokenBar item" = "顯示主要 TokenBar 項目";
+"Off hides only the main item. Enabled individual items and background updates continue to work." = "關閉只會隱藏主要項目；已啟用的個別項目與背景更新仍會繼續運作。";
 "Spins faster as the live token rate climbs (idle 2 fps, 1M tokens/min tops out at 40 fps)." = "即時 token 速率越高轉得越快（閒置 2 fps，每分鐘 100 萬 tokens 時達到上限 40 fps）。";
 "Gauge icons drain as the selected quota window empties. \"Color on warning only\" stays monochrome until under 25% left (amber) and 10% (red), like the battery icon." = "儀表圖示會隨著所選額度時間窗耗盡而下降。「僅警示時上色」在剩餘 25%（琥珀色）與 10%（紅色）之前維持單色，行為與電池圖示一致。";
 "Feeds the gauge icons and the \"Quota left\" title. Auto follows whichever window is closest to running out." = "決定儀表圖示與「剩餘額度」標題的資料來源。自動會追蹤最接近用盡的時間窗。";
-"Keep the main TokenBar item. Optional client items show each client's selected quota window; Auto chooses the tightest healthy window for that client." = "主 TokenBar 項目會保留。可選的個別用戶端項目會顯示各自選定的額度時間窗；自動會在該用戶端內選擇最吃緊且健康的時間窗。";
+"Optional client items show each client's selected quota window; Auto chooses the tightest healthy window for that client." = "可選的個別用戶端項目會顯示各自選定的額度時間窗；自動會在該用戶端內選擇最吃緊且健康的時間窗。";
 "Off hides the Agent-limits quota card everywhere — the Overview summary, every client's own tab, and this preview. Cost/token data is unaffected." = "關閉後會在所有位置隱藏 Agent 額度卡片 —— 包含總覽摘要、各用戶端分頁與此預覽。費用與 token 資料不受影響。";
 "On, bars count up as quota is used; off, they count down to what's left. The color always warns as quota runs low." = "開啟時長條隨用量往上累加，關閉時則往下遞減顯示剩餘。無論何者，額度偏低時顏色都會提出警示。";
 "The deficit/reserve marker. Historical learns each quota window's usage pattern; during learning, the Linear estimate is labeled; Linear uses the exact reset duration; Off hides the marker." = "超前／保留量的標記。歷史模式會學習每個額度時間窗的使用模式，學習期間會標示為線性估算；線性模式使用確切的重置週期；關閉則隱藏標記。";

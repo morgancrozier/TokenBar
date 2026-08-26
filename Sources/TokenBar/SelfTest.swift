@@ -876,6 +876,26 @@ enum SelfTest {
             return try? box.result?.get()
         }
 
+        let mainItemSuiteName = "com.nyanako.tokenbar.selftest.main-status-item"
+        if let mainItemDefaults = UserDefaults(suiteName: mainItemSuiteName) {
+            UserDefaults.standard.removePersistentDomain(forName: mainItemSuiteName)
+            defer { UserDefaults.standard.removePersistentDomain(forName: mainItemSuiteName) }
+
+            expect(
+                MainStatusItemPreference.isShown(defaults: mainItemDefaults),
+                "main status item defaults to visible when the preference is absent")
+            mainItemDefaults.set(false, forKey: MainStatusItemPreference.storageKey)
+            expect(
+                !MainStatusItemPreference.isShown(defaults: mainItemDefaults),
+                "main status item preference hides only when explicitly disabled")
+            mainItemDefaults.set(true, forKey: MainStatusItemPreference.storageKey)
+            expect(
+                MainStatusItemPreference.isShown(defaults: mainItemDefaults),
+                "main status item preference restores visibility immediately when re-enabled")
+        } else {
+            expect(false, "main status item preference test suite is available")
+        }
+
         // THROTTLE. Three independent callers fetch the OAuth quota payload
         // fetch-first, and the popover's loop is remounted by a `.task` on every
         // reopen — so opening and closing ten times issued ten requests, which
@@ -3752,12 +3772,16 @@ enum SelfTest {
         let quotaJSON = """
         {"generatedAt":"now","agents":[
           {"clientId":"codex","source":"oauth","updatedAt":"now",
-           "windows":[{"cardId":"session.v1","label":"Session","usedPercent":20,"remainingPercent":80},
-                      {"cardId":"weekly.v1","label":"Weekly","usedPercent":65,"remainingPercent":35},
+           "windows":[{"cardId":"session.v1","label":"Session","usedPercent":20,"remainingPercent":80,
+                       "resetsAt":"2026-07-18T14:12:00Z"},
+                      {"cardId":"weekly.v1","label":"Weekly","usedPercent":65,"remainingPercent":35,
+                       "resetsAt":"2026-07-24T00:00:00Z"},
                       {"cardId":"model.gpt|preview.v1","label":"Delimiter","usedPercent":5,"remainingPercent":95}]},
           {"clientId":"claude","source":"oauth","updatedAt":"now",
-           "windows":[{"cardId":"session.v1","label":"Session","usedPercent":88,"remainingPercent":12},
-                      {"cardId":"weekly.v1","label":"Weekly","usedPercent":10,"remainingPercent":90}]},
+           "windows":[{"cardId":"session.v1","label":"Session","usedPercent":88,"remainingPercent":12,
+                       "resetsAt":"2026-07-18T11:00:00Z"},
+                      {"cardId":"weekly.v1","label":"Weekly","usedPercent":10,"remainingPercent":90,
+                       "resetsAt":"2026-07-19T06:12:00Z"}]},
           {"clientId":"antigravity","source":"oauth","updatedAt":"now","windows":[],
            "error":"Antigravity OAuth client was not found."},
           {"clientId":"grok","source":"oauth","updatedAt":"now",
@@ -3802,6 +3826,22 @@ enum SelfTest {
                 && brandReps.map(\.pixelsWide) == [18, 36]
                 && brandReps.map(\.pixelsHigh) == [18, 36],
             "official status icon has fixed 1x and 2x representations")
+        let compactBrandImage = MainActor.assumeIsolated {
+            AgentIconView.statusItemImage(
+                clientId: "claude", size: ClientStatusItemRenderer.iconSize)
+        }
+        let compactBrandReps = compactBrandImage?.representations
+            .compactMap { $0 as? NSBitmapImageRep } ?? []
+        expect(
+            compactBrandReps.map(\.pixelsWide) == [16, 32]
+                && compactBrandReps.map(\.pixelsHigh) == [16, 32],
+            "individual item renderer reduces provider icons to crisp 16pt representations")
+        expect(
+            MainActor.assumeIsolated {
+                AgentIconView.statusItemImage(
+                    clientId: "claude", size: ClientStatusItemRenderer.iconSize) === compactBrandImage
+            },
+            "individual status icons reuse their static cached rendering")
         expect(
             MainActor.assumeIsolated {
                 AgentIconView.statusItemImage(clientId: "junie") == nil
@@ -3813,6 +3853,18 @@ enum SelfTest {
         if let clientDefaults = UserDefaults(suiteName: clientDefaultsName) {
             defer { clientDefaults.removePersistentDomain(forName: clientDefaultsName) }
             expect(ClientTray.enabled(defaults: clientDefaults).isEmpty, "individual trays default off")
+            expect(
+                ClientTray.layout(defaults: clientDefaults) == .stacked,
+                "individual item layout defaults to stacked")
+            clientDefaults.set(
+                ClientTray.Layout.inline.rawValue, forKey: ClientTray.layoutKey)
+            expect(
+                ClientTray.layout(defaults: clientDefaults) == .inline,
+                "individual item layout persists the selected inline mode")
+            clientDefaults.set("future-layout", forKey: ClientTray.layoutKey)
+            expect(
+                ClientTray.layout(defaults: clientDefaults) == .stacked,
+                "unknown persisted individual item layouts fail safely to stacked")
             expect(
                 ClientTray.canonicalEnabledRaw(["codex", "claude"]) == "claude,codex",
                 "enabled clients serialize as deterministic sorted CSV")
@@ -4226,8 +4278,144 @@ enum SelfTest {
             officialClients: officialClientIDs)
         expect(
             runtimePresentations.map(\.clientId) == ["codex"]
-                && runtimePresentations.first?.valueText == "35%",
+                && runtimePresentations.first?.valueText == "35%"
+                && runtimePresentations.first?.resetsAt == "2026-07-24T00:00:00Z",
             "runtime shells use graph presence, enabled state, official assets, and hidden tabs")
+        let resetTestNow = ISO8601DateFormatter().date(
+            from: "2026-07-18T10:00:00Z")!
+        let weeklyRuntime = ClientTray.runtimePresentations(
+            graph: clientGraph, payload: quotaPayload, enabled: ["claude", "codex"],
+            selections: ["claude": "weekly.v1", "codex": "weekly.v1"], hidden: [],
+            officialClients: officialClientIDs, layout: .stacked, now: resetTestNow)
+        let weeklyByClient = Dictionary(
+            uniqueKeysWithValues: weeklyRuntime.map { ($0.clientId, $0) })
+        expect(
+            weeklyByClient["codex"]?.valueText == "35%"
+                && weeklyByClient["codex"]?.resetsAt == "2026-07-24T00:00:00Z"
+                && weeklyByClient["codex"]?.compactResetText == "5d14h"
+                && weeklyByClient["claude"]?.valueText == "90%"
+                && weeklyByClient["claude"]?.resetsAt == "2026-07-19T06:12:00Z"
+                && weeklyByClient["claude"]?.compactResetText == "20h12m"
+                && weeklyByClient["claude"]?.accessibilityLabel.contains("20h12m") == true,
+            "explicit Weekly presentations keep that same window's percentage and reset")
+        let inlineWeeklyRuntime = ClientTray.runtimePresentations(
+            graph: clientGraph, payload: quotaPayload, enabled: ["claude", "codex"],
+            selections: ["claude": "weekly.v1", "codex": "weekly.v1"], hidden: [],
+            officialClients: officialClientIDs, layout: .inline, now: resetTestNow)
+        expect(
+            inlineWeeklyRuntime != weeklyRuntime
+                && inlineWeeklyRuntime.map(\.clientId) == weeklyRuntime.map(\.clientId)
+                && inlineWeeklyRuntime.map(\.valueText) == weeklyRuntime.map(\.valueText)
+                && inlineWeeklyRuntime.map(\.resetsAt) == weeklyRuntime.map(\.resetsAt)
+                && inlineWeeklyRuntime.map(\.compactResetText)
+                    == weeklyRuntime.map(\.compactResetText),
+            "layout switching invalidates reconciliation without changing quota selection")
+
+        if let stackedCodex = weeklyByClient["codex"],
+           let inlineCodex = inlineWeeklyRuntime.first(where: { $0.clientId == "codex" })
+        {
+            let renderingProbe = MainActor.assumeIsolated { () -> (Bool, Bool) in
+                let stackedContent = ClientStatusItemRenderer.content(for: stackedCodex)
+                let inlineContent = ClientStatusItemRenderer.content(for: inlineCodex)
+                let inlineSize = inlineContent.title.size()
+                let inlineFontSizes = Set((0 ..< inlineContent.title.length).compactMap {
+                    (inlineContent.title.attribute(
+                        .font, at: $0, effectiveRange: nil) as? NSFont)?.pointSize
+                })
+                let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+                defer { NSStatusBar.system.removeStatusItem(item) }
+                guard let button = item.button,
+                      let image = AgentIconView.statusItemImage(
+                          clientId: "claude", size: ClientStatusItemRenderer.iconSize),
+                      let stackedLength = ClientStatusItemRenderer.preferredItemLength(
+                          for: stackedContent)
+                else { return (false, false) }
+                item.length = stackedLength
+                ClientStatusItemRenderer.apply(stackedContent, image: image, to: button)
+                button.layoutSubtreeIfNeeded()
+                guard let visual = button.subviews.compactMap({
+                    $0 as? ClientStatusItemStackedContentView
+                }).first else { return (false, false) }
+                let geometry = visual.geometry
+                let stackedPass = stackedContent.isMultiline
+                    && stackedContent.stacked?.percent == "35%"
+                    && stackedContent.stacked?.reset == "5d14h"
+                    && button.attributedTitle.string.isEmpty
+                    && item.length == stackedLength
+                    && geometry.icon.midY == button.bounds.midY
+                    && geometry.percent.minX == geometry.reset.minX
+                    && geometry.textBlock.midY == button.bounds.midY
+                    && geometry.content.minX == 3
+                    && item.length - geometry.content.maxX == 3
+                let inlinePass = !inlineContent.isMultiline
+                    && inlineContent.title.string == "\u{2009}35% · 5d14h"
+                    && inlineFontSizes.contains(NSFont.systemFontSize)
+                    && inlineFontSizes.contains(11.5)
+                    && inlineSize.width > item.length
+                    && inlineSize.width + ClientStatusItemRenderer.iconSize < 140
+                return (stackedPass, inlinePass)
+            }
+            expect(
+                renderingProbe.0,
+                "stacked status item uses an explicitly centered icon-plus-two-label layout")
+            expect(
+                renderingProbe.1,
+                "inline status title has distinct hierarchy and a sensible intrinsic width")
+            let imageLifecycleProbe = MainActor.assumeIsolated { () -> Bool in
+                guard let claudeImage = AgentIconView.statusItemImage(
+                    clientId: "claude", size: ClientStatusItemRenderer.iconSize)
+                else { return false }
+                let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+                defer { NSStatusBar.system.removeStatusItem(item) }
+                guard let button = item.button else { return false }
+
+                // Reproduce the meaningful lifecycle break: stacked items keep
+                // their icon in an overlay, so the button's normal image can
+                // legitimately be nil before a later title update.
+                ClientStatusItemRenderer.apply(
+                    ClientStatusItemRenderer.content(for: inlineCodex),
+                    image: claudeImage,
+                    to: button)
+                button.image = nil
+                ClientStatusItemRenderer.apply(
+                    ClientStatusItemRenderer.content(for: stackedCodex),
+                    image: claudeImage,
+                    to: button)
+                let restoredImage = ClientStatusItemRenderer.providerImage(on: button)
+                return button.subviews.contains {
+                    $0 is ClientStatusItemStackedContentView
+                }
+                    && restoredImage === claudeImage
+            }
+            expect(
+                imageLifecycleProbe,
+                "stacked item updates restore the provider icon after a lost button image")
+            expect(
+                stackedCodex.accessibilityLabel == inlineCodex.accessibilityLabel
+                    && stackedCodex.accessibilityLabel.contains("35 percent quota remaining")
+                    && stackedCodex.accessibilityLabel.contains("resets in 5d14h"),
+                "both individual item layouts expose the same understandable accessibility text")
+        } else {
+            expect(false, "stacked and inline Codex presentations are available")
+        }
+        let nextMinuteRuntime = ClientTray.runtimePresentations(
+            graph: clientGraph, payload: quotaPayload, enabled: ["claude", "codex"],
+            selections: ["claude": "weekly.v1", "codex": "weekly.v1"], hidden: [],
+            officialClients: officialClientIDs,
+            now: resetTestNow.addingTimeInterval(60))
+        expect(
+            weeklyRuntime != nextMinuteRuntime
+                && nextMinuteRuntime.first { $0.clientId == "codex" }?.resetsAt
+                    == weeklyByClient["codex"]?.resetsAt,
+            "client presentation reconciliation observes countdown minute changes")
+        expect(
+            ClientTray.compactResetText(
+                "2026-07-18T14:12:00Z", now: resetTestNow) == "4h12m"
+                && ClientTray.compactResetText(nil, now: resetTestNow) == nil
+                && ClientTray.compactResetText("invalid", now: resetTestNow) == nil
+                && ClientTray.compactResetText(
+                    "2026-07-18T09:59:59Z", now: resetTestNow) == nil,
+            "client reset countdown is compact, omits seconds, and fails closed")
         let lastGoodRuntime = ClientTray.runtimePresentations(
             graph: clientGraph, payload: quotaPayload, enabled: ["grok"],
             selections: ["grok": "billing.weekly.v1"], hidden: [],
@@ -4268,6 +4456,17 @@ enum SelfTest {
                     selections: [:], hidden: [],
                     officialClients: officialClientIDs).first?.toolTip,
             "a missing explicit card reads as an unavailable selection, not a provider outage")
+        if let missingRuntime {
+            let missingContentPass = MainActor.assumeIsolated {
+                let missingContent = ClientStatusItemRenderer.content(for: missingRuntime)
+                return !missingContent.isMultiline
+                    && !missingContent.title.string.contains("·")
+                    && missingContent.title.string == "\u{2009}—%"
+            }
+            expect(
+                missingContentPass,
+                "missing reset falls back to a readable percentage-only status title")
+        }
 
         let sensitiveQuotaJSON = """
         {"generatedAt":"now","agents":[
