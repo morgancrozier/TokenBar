@@ -7,8 +7,11 @@ public enum QuotaResolver {
     public static let auto = "auto"
 
     /// Builds the canonical persisted selection for one quota card.
+    /// A persisted selection only ever names a primary account's window (an
+    /// extra account's is stored under its own key, see `canonicalSelection`),
+    /// so this is that window's `QuotaWindowRef.key`.
     public static func selection(clientId: String, cardId: String) -> String {
-        "\(clientId)|\(cardId)"
+        QuotaWindowRef(clientId: clientId, accountKey: nil, cardId: cardId).key
     }
 
     /// Canonicalizes a persisted selection against the current payload.
@@ -102,7 +105,10 @@ public enum QuotaResolver {
         return autoCandidate(payload: payload, excluding: excluding) == nil
     }
 
-    private static func parseExplicitSelection(
+    /// The one parser for a persisted selection. `value` is a card id, or a
+    /// legacy label `canonicalSelection` has not migrated yet. Nil for `auto`,
+    /// an empty string, and anything malformed.
+    public static func parseExplicitSelection(
         _ raw: String
     ) -> (clientId: String, value: String)? {
         guard !raw.isEmpty, raw != auto else { return nil }

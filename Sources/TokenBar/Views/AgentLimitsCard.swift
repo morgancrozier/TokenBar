@@ -45,7 +45,7 @@ struct AgentLimitsCard: View {
     /// multi-agent overview; a single-client tab passes nothing, because the
     /// full window card sits directly above this one there and a second, smaller
     /// drawing of the same series reads as a thumbnail of the card above it.
-    var curves: [String: [QuotaSample]] = [:]
+    var curves: [QuotaWindowRef: [QuotaSample]] = [:]
 
     /// Bar fills by used (true) or remaining (false).
     @AppStorage("tokenbar.limits.asUsed") private var asUsed = false
@@ -815,8 +815,7 @@ struct AgentLimitsCard: View {
     @ViewBuilder private func windowRow(
         _ window: UsageWindow, row: AccountIdentity, brand: String
     ) -> some View {
-        let curveKey = WindowCardLoader.curveKey(
-            clientId: row.clientId, accountKey: row.accountKey, cardId: window.cardId)
+        let ref = row.window(window.cardId)
         let remaining = min(100, max(0, window.remainingPercent))
         let used = min(100, max(0, window.usedPercent))
         // Pace is suppressed entirely in the classic layout and when the user
@@ -840,7 +839,7 @@ struct AgentLimitsCard: View {
         // not a density option, and must appear in every layout even though
         // only `chart` also draws the line these samples feed.
         let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
-        let samples = curves[curveKey] ?? []
+        let samples = curves[ref] ?? []
         let trend = Self.trend(window: window, samples: samples, nowMs: nowMs)
 
         if classic {
@@ -850,7 +849,7 @@ struct AgentLimitsCard: View {
                     // so QuotaResolver's legacy-selection matching still works.
                     Text(window.label.localized)
                         .font(.caption2.weight(.medium))
-                    trendIndicator(trend, id: curveKey)
+                    trendIndicator(trend, id: ref.key)
                     Spacer()
                     Text(resetText ?? leftLabel)
                         .font(.caption2)
@@ -870,7 +869,7 @@ struct AgentLimitsCard: View {
                     // so QuotaResolver's legacy-selection matching still works.
                     Text(window.label.localized)
                         .font(.caption2.weight(.medium))
-                    trendIndicator(trend, id: curveKey)
+                    trendIndicator(trend, id: ref.key)
                     Spacer()
                     if let reset = resetText {
                         Text(reset)

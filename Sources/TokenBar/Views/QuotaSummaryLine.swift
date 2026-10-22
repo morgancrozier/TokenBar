@@ -119,11 +119,9 @@ struct QuotaSummaryLine: View {
     /// string is assertable: `M3-k` covers the label's derivation, but a gate
     /// that stops at the derivation cannot see this line drop it again.
     static func tightestName(_ summary: QuotaSummary) -> String {
-        let style = ClientRegistry.style(summary.tightestClient)
-        let account = AccountIdentity(
+        AccountIdentity(
             clientId: summary.tightestClient, accountKey: summary.tightestAccountKey
-        ).accountLabel
-        return [style.displayName, account].compactMap(\.self).joined(separator: " ")
+        ).displayName
     }
 
     private func tightestRow(_ summary: QuotaSummary) -> some View {
@@ -157,11 +155,7 @@ struct QuotaSummaryLine: View {
     /// A named function for the same reason `tightestName` is one: `M3-n`
     /// asserts the composed string directly rather than only the view body.
     static func burnName(_ burning: BurnWarning) -> String {
-        let style = ClientRegistry.style(burning.clientId)
-        let account = AccountIdentity(
-            clientId: burning.clientId, accountKey: burning.accountKey
-        ).accountLabel
-        return [style.displayName, account].compactMap(\.self).joined(separator: " ")
+        AccountIdentity(clientId: burning.clientId, accountKey: burning.accountKey).displayName
     }
 
     /// The rate line. Amber rather than red: being ahead of schedule is worth

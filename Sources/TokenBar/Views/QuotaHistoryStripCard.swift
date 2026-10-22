@@ -11,10 +11,10 @@ import TokenBarCore
 /// say whether 79% is normal.
 struct QuotaHistoryStripCard: View {
     let summaries: [QuotaWindowSummary]
-    /// Per-window equivalence, keyed as the summary's `id`. Absent means either
+    /// Per-window equivalence, keyed as the summary's `ref`. Absent means either
     /// the window cannot support an estimate or the scan has not landed — the
     /// strip above never waits on it either way.
-    var equivalences: [String: WindowEquivalence.Row] = [:]
+    var equivalences: [QuotaWindowRef: WindowEquivalence.Row] = [:]
     var attempted = true
 
     private static let stripHeight: CGFloat = 26
@@ -111,12 +111,7 @@ struct QuotaHistoryStripCard: View {
     /// A named function, not composed inline in `row`/`tooltipLayer`, so
     /// `M3-n` can assert the string directly.
     static func rowLabel(_ summary: QuotaWindowSummary) -> String {
-        let style = ClientRegistry.style(summary.clientId)
-        let account = AccountIdentity(
-            clientId: summary.clientId, accountKey: summary.accountKey
-        ).accountLabel
-        let name = [style.displayName, account].compactMap(\.self).joined(separator: " ")
-        return "\(name) · \(summary.windowLabel.localized)"
+        "\(summary.ref.account.displayName) · \(summary.windowLabel.localized)"
     }
 
     @ViewBuilder
@@ -136,7 +131,7 @@ struct QuotaHistoryStripCard: View {
             Text(headline(summary))
                 .font(.system(size: 9))
                 .foregroundStyle(.tertiary)
-            if let row = equivalences[summary.id] {
+            if let row = equivalences[summary.ref] {
                 Text(WindowEquivalence.text(
                     row, tokens: Format.compactTokens, money: Format.usdOrBelowCent))
                     .font(.system(size: 9))

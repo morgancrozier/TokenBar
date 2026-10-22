@@ -209,7 +209,7 @@ enum WindowProbe {
                         curve: { c, a, k, g in
                             (try? TBCore.quotaCurve(clientId: c, accountKey: a, windowKey: k, generation: g)) ?? nil
                         }, nowMs: now) ?? []
-                    curveMs.append(("\(agent.clientId)|\(w.cardId)",
+                    curveMs.append((agent.ref(for: w).key,
                                     Date().timeIntervalSince(t) * 1000))
                 }
             }
@@ -280,7 +280,7 @@ enum WindowProbe {
                 print("    ⚠️ \(a.clientId): error=\(a.error ?? "nil") windows=\(a.windows.count)")
             }
             var resolved: [(String, String, WindowResolution)] = []
-            var windowKeys: [String: String?] = [:]
+            var windowKeys: [QuotaWindowRef: String?] = [:]
 
             for agent in payload.agents {
                 for w in agent.windows {
@@ -309,7 +309,7 @@ enum WindowProbe {
                             firstUsageAfterReset: t0)
                     }
                     resolved.append((agent.clientId, w.cardId, final))
-                    windowKeys["\(agent.clientId)|\(w.cardId)"] = w.paceStatus.windowKey
+                    windowKeys[agent.ref(for: w)] = w.paceStatus.windowKey
                 }
             }
 
@@ -322,11 +322,11 @@ enum WindowProbe {
             } }
             print("  label 實測值：")
             for a in payload.agents { for w in a.windows {
-                print("    \(a.clientId)|\(w.cardId)  label=\(String(reflecting: w.label))")
+                print("    \(a.ref(for: w).key)  label=\(String(reflecting: w.label))")
             } }
             print("  windowKey 實測值：")
-            for (k, v) in windowKeys.sorted(by: { $0.key < $1.key }) {
-                print("    \(k)  →  \(v ?? "nil")")
+            for (k, v) in windowKeys.sorted(by: { $0.key.key < $1.key.key }) {
+                print("    \(k.key)  →  \(v ?? "nil")")
             }
             for (client, card, state) in resolved {
                 print(String(format: "  %-16@ %-22@ %@",
@@ -550,7 +550,8 @@ enum WindowProbe {
                 }
 
                 // Does the quota line have real samples inside this window?
-                guard let key = windowKeys["\(client)|\(card)"] ?? nil else {
+                guard let key = windowKeys[
+                    QuotaWindowRef(clientId: client, accountKey: nil, cardId: card)] ?? nil else {
                     print("    額度線：此窗無 windowKey")
                     continue
                 }

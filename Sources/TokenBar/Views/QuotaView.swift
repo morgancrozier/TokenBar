@@ -22,7 +22,7 @@ struct QuotaView: View {
     var scanFailed = false
     var curveUnreadable = false
     /// Quota readings per `"<clientId>|<cardId>"`, for the sparklines.
-    var windowCurves: [String: [QuotaSample]] = [:]
+    var windowCurves: [QuotaWindowRef: [QuotaSample]] = [:]
     /// The selected window's card state on a single-client tab.
     var windowCard: WindowCardState?
     /// Recorded reset cycles of that window, newest first.
@@ -36,10 +36,10 @@ struct QuotaView: View {
     /// Recorded-cycle strips for every displayed window.
     var windowSummaries: [QuotaWindowSummary] = []
     /// Weekday-by-hour consumption per window, keyed as the window's id.
-    var heatmaps: [String: QuotaHeatmap] = [:]
+    var heatmaps: [QuotaWindowRef: QuotaHeatmap] = [:]
     /// Which windows have a grid at all. Not derived from `windowSummaries`.
     var heatmapWindows: [QuotaHeatmapWindow] = []
-    var equivalences: [String: WindowEquivalence.Row] = [:]
+    var equivalences: [QuotaWindowRef: WindowEquivalence.Row] = [:]
     var trend: SubscriptionTrend?
 
     @AppStorage("tokenbar.limits.enabled") private var limitsEnabled = true

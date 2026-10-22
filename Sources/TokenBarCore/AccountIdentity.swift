@@ -23,20 +23,21 @@ public struct AccountIdentity: Hashable, Sendable {
     /// except an extra Claude config directory.
     public var isPrimary: Bool { accountKey == nil }
 
-    /// The dictionary key and `Identifiable.id` for one window of one account.
+    /// One window of this account. See `QuotaWindowRef` for why windows are keyed
+    /// by that value rather than by a string built here.
+    public func window(_ cardId: String) -> QuotaWindowRef {
+        QuotaWindowRef(account: self, cardId: cardId)
+    }
+
+    /// The client's display name, qualified by `accountLabel` when this is not
+    /// the primary — what every quota surface that names a subscription shows.
     ///
-    /// The primary keeps the exact two-part shape callers have always built by
-    /// hand (`"<clientId>|<cardId>"`), so nothing a plain client stores or
-    /// looks up changes; only an extra account's key grows a third segment.
-    ///
-    /// It lives here, in the lower target, because both halves of the quota
-    /// lens need it: `DashboardModel` stores the grids and `QuotaOverview`'s
-    /// row ids select into them. Two definitions of the same key is how one
-    /// side stores under three parts while the other looks up under two, which
-    /// finds nothing and reports nothing.
-    public func windowKey(cardId: String) -> String {
-        guard let accountKey else { return "\(clientId)|\(cardId)" }
-        return "\(clientId)|\(accountKey)|\(cardId)"
+    /// One composition for all of them. Four views each joined the name and
+    /// the label themselves, and adding the account to them took a commit that
+    /// had to find every copy.
+    public var displayName: String {
+        [ClientRegistry.style(clientId).displayName, accountLabel]
+            .compactMap(\.self).joined(separator: " ")
     }
 
     /// A short label naming which account this is, for any surface that shows

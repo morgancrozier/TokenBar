@@ -1098,7 +1098,7 @@ struct SettingsPanel: View {
     private func quotaSourcePicker() -> some View {
         let canonical = QuotaResolver.canonicalSelection(
             payload: agentUsage, selection: quotaSource)
-        let selectedClientId = quotaClientId(from: canonical)
+        let selectedClientId = QuotaResolver.parseExplicitSelection(canonical)?.clientId
         // Primary accounts only: this picker writes one global selection
         // string with no account component, and an extra account can offer
         // windows carded identically to the primary's (both a "session.v1"),
@@ -1178,13 +1178,6 @@ struct SettingsPanel: View {
                 }
             }
         }
-    }
-
-    private func quotaClientId(from selection: String) -> String? {
-        guard selection != QuotaResolver.auto else { return nil }
-        return selection.split(
-            separator: "|", maxSplits: 1, omittingEmptySubsequences: false
-        ).first.map(String.init)
     }
 
     // MARK: - Building blocks
