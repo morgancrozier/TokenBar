@@ -14,12 +14,12 @@ struct QuotaHeatmapCard: View {
     /// window whose only movement is in the cycle now running had a grid the
     /// picker could not reach, and the card said nothing was recorded.
     let windows: [QuotaHeatmapWindow]
-    /// Keyed as `QuotaHeatmapWindow.id`.
-    let heatmaps: [String: QuotaHeatmap]
+    /// Keyed as `QuotaHeatmapWindow.ref`.
+    let heatmaps: [QuotaWindowRef: QuotaHeatmap]
     /// The per-window equivalence, keyed the same way. What turns a percentage
     /// into money — and the only reason this card can show money at all
     /// without a scan.
-    var equivalences: [String: WindowEquivalence.Row] = [:]
+    var equivalences: [QuotaWindowRef: WindowEquivalence.Row] = [:]
     var attempted = true
 
     @AppStorage("tokenbar.heatmap.window") private var selectedRaw = ""
@@ -50,7 +50,7 @@ struct QuotaHeatmapCard: View {
         windows.first { $0.id == selectedRaw } ?? windows.first
     }
 
-    private var grid: QuotaHeatmap? { selected.flatMap { heatmaps[$0.id] } }
+    private var grid: QuotaHeatmap? { selected.flatMap { heatmaps[$0.ref] } }
 
     var body: some View {
         DashCard("When the allowance goes", subtitle: subtitle) {
@@ -130,12 +130,7 @@ struct QuotaHeatmapCard: View {
     /// `static`, and a named function rather than composed inline, so `M3-n`
     /// can assert the string directly.
     static func label(_ window: QuotaHeatmapWindow) -> String {
-        let style = ClientRegistry.style(window.clientId)
-        let account = AccountIdentity(
-            clientId: window.clientId, accountKey: window.accountKey
-        ).accountLabel
-        let name = [style.displayName, account].compactMap(\.self).joined(separator: " ")
-        return "\(name) · \(window.windowLabel.localized)"
+        "\(window.ref.account.displayName) · \(window.windowLabel.localized)"
     }
 
     private func heatmap(_ grid: QuotaHeatmap) -> some View {
@@ -261,7 +256,7 @@ struct QuotaHeatmapCard: View {
                     // summed over the window's whole recorded history.
                     Text("%@ allowance-points spent here".localized(Self.percent(value)))
                         .font(.caption2)
-                    equivalent(value, row: equivalences[selected.id])
+                    equivalent(value, row: equivalences[selected.ref])
                 }
             }
             .padding(8)

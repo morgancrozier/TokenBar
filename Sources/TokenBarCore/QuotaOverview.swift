@@ -29,9 +29,11 @@ public struct QuotaWindowSummary: Equatable, Sendable, Identifiable {
     public let neverExhausted: Bool
     public let cycleCount: Int
 
-    public var id: String {
-        AccountIdentity(clientId: clientId, accountKey: accountKey).windowKey(cardId: cardId)
+    public var ref: QuotaWindowRef {
+        QuotaWindowRef(clientId: clientId, accountKey: accountKey, cardId: cardId)
     }
+
+    public var id: String { ref.key }
 }
 
 /// A window the heatmap can draw, whether or not it has completed a cycle yet.
@@ -53,9 +55,12 @@ public struct QuotaHeatmapWindow: Equatable, Sendable, Identifiable {
     /// See `QuotaWindowSummary.accountKey`.
     public let accountKey: String?
 
-    public var id: String {
-        AccountIdentity(clientId: clientId, accountKey: accountKey).windowKey(cardId: cardId)
+    public var ref: QuotaWindowRef {
+        QuotaWindowRef(clientId: clientId, accountKey: accountKey, cardId: cardId)
     }
+
+    /// Persisted by the heatmap picker as its selection, so it stays a string.
+    public var id: String { ref.key }
 
     public init(
         clientId: String, accountKey: String? = nil, cardId: String, windowLabel: String,

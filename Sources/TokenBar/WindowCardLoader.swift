@@ -43,18 +43,6 @@ enum WindowCardLoader {
     /// Observed keys (2026-08-14, live payload): `session.v1`, `main.session.v1`,
     /// `weekly.v1`, `main.weekly.v1`, `weekly_scoped.fable.v1`, `chat.v1`,
     /// `billing.weekly.v1`, `additional.<hash>.primary.v1`.
-    /// Identifies one window's curve/heatmap across every displayed client AND
-    /// account. `"<clientId>|<cardId>"` alone collides the instant a second
-    /// account of the same client offers an identically-carded window (both a
-    /// "session.v1") — one account's curve would silently overwrite the
-    /// other's in a shared dictionary keyed that way. The primary account
-    /// keeps the exact two-part shape callers have always built by hand
-    /// (`"\(clientId)|\(cardId)")`), so a plain client's curve key is
-    /// unaffected; only an extra account's key grows a third segment.
-    static func curveKey(clientId: String, accountKey: String?, cardId: String) -> String {
-        AccountIdentity(clientId: clientId, accountKey: accountKey).windowKey(cardId: cardId)
-    }
-
     static func isSessionClass(windowKey: String?) -> Bool {
         guard let windowKey else { return false }
         return windowKey.split(separator: ".").contains("session")
@@ -101,11 +89,9 @@ enum WindowCardLoader {
     ) -> (clientId: String, window: UsageWindow)? {
         // A selection stored for a different agent is not stale state to clear,
         // it just does not apply here — each tab answers for its own client.
-        if let explicit, let sep = explicit.firstIndex(of: "|"),
-           String(explicit[explicit.startIndex..<sep]) == clientId,
-           let window = windows.first(where: {
-               $0.cardId == String(explicit[explicit.index(after: sep)...])
-           }) {
+        if let explicit, let parsed = QuotaResolver.parseExplicitSelection(explicit),
+           parsed.clientId == clientId,
+           let window = windows.first(where: { $0.cardId == parsed.value }) {
             return (clientId, window)
         }
         if let session = windows.first(where: {
@@ -189,9 +175,10 @@ enum WindowCardLoader {
 
         let window = selected.window
         let candidates = agent.uniqueCardWindows.map {
-            (cardId: "\(clientId)|\($0.cardId)", label: $0.label)
+            (cardId: QuotaResolver.selection(clientId: clientId, cardId: $0.cardId),
+             label: $0.label)
         }
-        let cardId = "\(clientId)|\(window.cardId)"
+        let cardId = QuotaResolver.selection(clientId: clientId, cardId: window.cardId)
 
         // `nil` is "could not read", `[]` is "read fine, nothing in this
         // window". Only the second is a fact about the subscription, and only
@@ -374,37 +361,29 @@ enum WindowCardLoader {
             points: curve.points))
     }
 
-    /// The model scope of one window, addressed the way every other surface
-    /// addresses a window: by its `"<clientId>|<cardId>"`.
+    /// The model scope of one window, for the history rows and the
+    /// equivalence estimate, which hold a `QuotaWindowRef` and no `UsageWindow`.
     ///
-    /// The history rows and the equivalence estimate are keyed that way and
-    /// have no `UsageWindow` in hand, so without this they would each re-derive
-    /// the scope from the window key string — three parsers for one fact, which
-    /// is how they drift.
-    static func modelScope(payload: AgentUsagePayload?, cardId: String?) -> String? {
-        guard let payload, let cardId,
-              let separator = cardId.firstIndex(of: "|")
-        else { return nil }
-        let clientId = String(cardId[cardId.startIndex..<separator])
-        let card = String(cardId[cardId.index(after: separator)...])
-        return payload.agents
-            .first { $0.clientId == clientId }?
-            .uniqueCardWindows
-            .first { $0.cardId == card }?
-            .modelScope
+    /// Takes the ref rather than a key string: the string form of an extra
+    /// account's window has three segments, and splitting it at the first `|`
+    /// looked up a card named after the account's path — so that account's
+    /// scoped windows were estimated against every model it used.
+    static func modelScope(payload: AgentUsagePayload?, window: QuotaWindowRef?) -> String? {
+        guard let payload, let window else { return nil }
+        return window.window(in: payload)?.modelScope
     }
 
-    /// The `"<clientId>|<cardId>"` the card is currently showing, or nil when
-    /// nothing can be selected. One statement of "which window is on screen",
-    /// so retention decisions elsewhere compare against the same answer the
-    /// card itself resolves.
-    static func selectedCardId(payload: AgentUsagePayload?, clientId: String) -> String? {
+    /// The window the card is currently showing, or nil when nothing can be
+    /// selected. One statement of "which window is on screen", so retention
+    /// decisions elsewhere compare against the same answer the card itself
+    /// resolves. Always the primary account's — see `select`.
+    static func selectedWindow(payload: AgentUsagePayload?, clientId: String) -> QuotaWindowRef? {
         guard let payload,
               let selected = select(
                   payload: payload, clientId: clientId,
                   chosen: UserDefaults.standard.string(forKey: selectionKey))
         else { return nil }
-        return "\(clientId)|\(selected.window.cardId)"
+        return QuotaWindowRef(clientId: clientId, accountKey: nil, cardId: selected.window.cardId)
     }
 
     /// Not private: `AgentLimitsCard`'s sparkline needs the same series for

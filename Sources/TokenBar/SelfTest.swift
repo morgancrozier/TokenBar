@@ -11456,12 +11456,12 @@ enum SelfTest {
         // window selections share a client, so "keep what we had for this
         // client" could leave the chart on the window the user navigated away
         // from while the picker highlighted the new one.
-        let wSelected = WindowCardLoader.selectedCardId(
-            payload: wPayload, clientId: "codex")
+        let wSelected = WindowCardLoader.selectedWindow(
+            payload: wPayload, clientId: "codex")?.key
         expect(wSelected == "codex|session.v1",
                "L6f the selected card id names the client AND the window")
         expect(
-            WindowCardLoader.selectedCardId(payload: wPayload, clientId: "absent") == nil,
+            WindowCardLoader.selectedWindow(payload: wPayload, clientId: "absent") == nil,
             "L6f and is nil when nothing can be selected, so a retained card cannot match it")
         expect(
             WindowCardLoader.quotaHalf(
@@ -11680,24 +11680,164 @@ enum SelfTest {
         }
 
         // MS-KEY. The history rows and the equivalence estimate hold a
-        // `"<clientId>|<cardId>"` and no `UsageWindow`, so they ask for the
-        // scope by that key. Without one lookup they would each parse it out of
-        // the window-key string — three parsers for one fact.
+        // `QuotaWindowRef` and no `UsageWindow`, so they ask for the scope by that
+        // ref. Without one lookup they would each parse it out of the
+        // window-key string — three parsers for one fact.
+        func msRef(_ client: String, _ card: String, account: String? = nil) -> QuotaWindowRef {
+            QuotaWindowRef(clientId: client, accountKey: account, cardId: card)
+        }
         expect(WindowCardLoader.modelScope(
-                   payload: msPayload, cardId: "codex|weekly_scoped.fable.v1") == "fable",
-               "MS-KEY a window's scope is addressable by the same key every other "
+                   payload: msPayload, window: msRef("codex", "weekly_scoped.fable.v1")) == "fable",
+               "MS-KEY a window's scope is addressable by the same ref every other "
                    + "surface uses to name it")
         expect(WindowCardLoader.modelScope(
-                   payload: msUnscoped, cardId: "codex|weekly.v1") == nil,
+                   payload: msUnscoped, window: msRef("codex", "weekly.v1")) == nil,
                "MS-KEY and an unscoped window answers nil, so the lookup is not "
                    + "simply returning whatever it finds first")
         expect(WindowCardLoader.modelScope(
-                   payload: msPayload, cardId: "codex|no.such.window.v1") == nil
+                   payload: msPayload, window: msRef("codex", "no.such.window.v1")) == nil
                    && WindowCardLoader.modelScope(
-                       payload: msPayload, cardId: "ghost|weekly_scoped.fable.v1") == nil
-                   && WindowCardLoader.modelScope(payload: msPayload, cardId: nil) == nil,
+                       payload: msPayload, window: msRef("ghost", "weekly_scoped.fable.v1")) == nil
+                   && WindowCardLoader.modelScope(payload: msPayload, window: nil) == nil,
                "MS-KEY an unknown card, an unknown client and a missing key all "
                    + "answer nil rather than the wrong window's scope")
+
+        // MS-ACCOUNT. An extra account's window is looked up as THAT account's.
+        // Its string key has three segments with a path in the middle, and the
+        // lookup this replaced split that key at the first `|`, asked for a card
+        // named "<path>|<card>", and answered nil — so the extra account's
+        // equivalence estimate counted every model it used against a scoped
+        // allowance. Two accounts here offer the same card under different
+        // scopes, so a lookup that falls back to the primary also goes red.
+        let msAccountKey = "/Users/someone/.claude-work"
+        let msAccounts = try! JSONDecoder().decode(
+            AgentUsagePayload.self,
+            from: Data("""
+                {"generatedAt":"t","publicationGeneration":7,"agents":[
+                  {"clientId":"claude","source":"oauth","updatedAt":"t","windows":[
+                    {"cardId":"weekly_scoped.v1","label":"Weekly","usedPercent":10,
+                     "remainingPercent":90,"durationSeconds":604800,"windowMinutes":10080,"modelScope":"fable",
+                     "paceStatus":{"state":"learningHistory","windowKey":"weekly_scoped.v1",
+                                   "durationSeconds":604800,"durationSource":"provider",
+                                   "completeCycles":1}}]},
+                  {"clientId":"claude","accountKey":"\(msAccountKey)","source":"oauth",
+                   "updatedAt":"t","windows":[
+                    {"cardId":"weekly_scoped.v1","label":"Weekly","usedPercent":10,
+                     "remainingPercent":90,"durationSeconds":604800,"windowMinutes":10080,"modelScope":"opus",
+                     "paceStatus":{"state":"learningHistory","windowKey":"weekly_scoped.v1",
+                                   "durationSeconds":604800,"durationSource":"provider",
+                                   "completeCycles":1}}]}
+                ]}
+                """.utf8))
+        let msExtraRef = msRef("claude", "weekly_scoped.v1", account: msAccountKey)
+        expect(WindowCardLoader.modelScope(payload: msAccounts, window: msExtraRef) == "opus",
+               "MS-ACCOUNT an extra account's scoped window answers its own scope, "
+                   + "not nil and not the primary's")
+        expect(WindowCardLoader.modelScope(
+                   payload: msAccounts, window: msRef("claude", "weekly_scoped.v1")) == "fable",
+               "MS-ACCOUNT and the primary's identically-carded window keeps its own")
+        expect(msExtraRef.key == "claude|\(msAccountKey)|weekly_scoped.v1",
+               "MS-ACCOUNT the extra account's string key is the three-part form the "
+                   + "heatmap picker has already persisted")
+
+        // QL. The Quota lens's replacement rules, driven through `QuotaLens`
+        // itself: readings in, state out, no model and no data source. Each
+        // case runs a refresh that succeeds and then one that should NOT
+        // replace what it produced, because a refresh that cannot answer is
+        // not an answer.
+        let qlReset = wIso
+        let qlPayload = windowPayload([
+            (client: "codex", windows: [
+                (card: "session.v1", key: "session.v1", resetsAt: qlReset, durationSecs: 18_000),
+                (card: "weekly.v1", key: "weekly.v1", resetsAt: qlReset, durationSecs: 604_800),
+            ]),
+            (client: "grok", windows: [
+                (card: "weekly.v1", key: "weekly.v1", resetsAt: qlReset, durationSecs: 604_800),
+            ]),
+        ])
+        func qlInputs(
+            clients: [String], usageClient: String? = nil, graphArrived: Bool = true
+        ) -> QuotaLens.Inputs {
+            QuotaLens.Inputs(
+                payload: qlPayload, attempted: true, cardClients: clients,
+                usageClient: usageClient, graphArrived: graphArrived, scan: nil,
+                scanIsFresh: false, scanFailedClients: [], confirmed: [],
+                nowMs: wNow * 1000)
+        }
+        let qlCurve = windowCurve(
+            resetAtSecs: wNow + 3_600, durationSecs: 18_000,
+            at: [(wNow - 2_000, 4), (wNow - 500, 9)])
+        let qlRead: QuotaLens.CurveRead = { _, _, _, _ in qlCurve }
+        struct QLExpired: Error {}
+        let qlThrow: QuotaLens.CurveRead = { _, _, _, _ in throw QLExpired() }
+        func qlIsLoading(_ state: WindowCardState?) -> Bool {
+            if case .loading = state { return true }
+            return false
+        }
+
+        // QL-throw. A curve read that throws is a transient generation
+        // expiry. The card already drawn for the selected window stays.
+        var qlLens = QuotaLens()
+        qlLens.refreshQuotaHalves(qlInputs(clients: ["codex"]), readCurve: qlRead)
+        let qlDrawn = qlLens.windowCards["codex"]?.cardId
+        expect(qlDrawn != nil && !qlIsLoading(qlLens.windowCards["codex"]),
+               "QL-throw the fixture draws a card before the failing refresh")
+        qlLens.refreshQuotaHalves(qlInputs(clients: ["codex"]), readCurve: qlThrow)
+        expect(!qlIsLoading(qlLens.windowCards["codex"])
+                   && qlLens.windowCards["codex"]?.cardId == qlDrawn,
+               "QL-throw a thrown curve read keeps the drawn card rather than "
+                   + "sending it back to waiting")
+
+        // QL-partial. The same expiry part-way through the summary reads
+        // publishes nothing, rather than a set that silently lacks a window.
+        let qlHeatmapsBefore = qlLens.quotaHeatmaps.count
+        var qlCalls = 0
+        let qlSecondThrows: QuotaLens.CurveRead = { _, _, _, _ in
+            qlCalls += 1
+            // Reads 1–3 are the curves, 4–5 the two cards, 6–8 the
+            // summaries: this fails the last summary read.
+            if qlCalls == 8 { throw QLExpired() }
+            return qlCurve
+        }
+        qlLens.refreshQuotaHalves(qlInputs(clients: ["codex", "grok"]), readCurve: qlRead)
+        let qlFull = qlLens.quotaHeatmaps.count
+        qlLens.refreshQuotaHalves(qlInputs(clients: ["codex", "grok"]), readCurve: qlSecondThrows)
+        expect(qlHeatmapsBefore == 2 && qlFull == 3,
+               "QL-partial the fixture's grids cover every window read")
+        expect(qlLens.quotaHeatmaps.count == qlFull
+                   && Set(qlLens.quotaHeatmaps.keys).contains(
+                       QuotaWindowRef(clientId: "grok", accountKey: nil, cardId: "weekly.v1")),
+               "QL-partial a refresh with one failed read keeps the complete set of grids")
+
+        // QL-empty. No client on screen is two different facts. Before graph
+        // data arrives it is a view still loading, and the grids stay; once
+        // it has, it is the user hiding their last client, and they go.
+        qlLens.refreshQuotaHalves(qlInputs(clients: [], graphArrived: false), readCurve: qlRead)
+        expect(qlLens.quotaHeatmaps.count == qlFull,
+               "QL-empty an empty client set before graph data keeps the grids")
+        qlLens.refreshQuotaHalves(qlInputs(clients: [], graphArrived: true), readCurve: qlRead)
+        expect(qlLens.quotaHeatmaps.isEmpty && qlLens.quotaWindowSummaries.isEmpty,
+               "QL-empty and once graph data is in, hiding the last client clears them")
+
+        // QL-history. Cycles held for one tab's window are not kept under
+        // another tab when the other's read fails: that would label one
+        // subscription's history as another's.
+        var qlHistory = QuotaLens()
+        qlHistory.refreshQuotaHalves(
+            qlInputs(clients: ["codex"], usageClient: "codex"), readCurve: qlRead)
+        let qlHeldWindow = WindowCardLoader.selectedWindow(payload: qlPayload, clientId: "codex")
+        expect(qlHistory.quotaCyclesWindow == qlHeldWindow && qlHeldWindow != nil
+                   && !qlHistory.quotaCurveUnreadable,
+               "QL-history the fixture holds codex's window before the failing read")
+        qlHistory.refreshQuotaHalves(
+            qlInputs(clients: ["codex"], usageClient: "codex"), readCurve: qlThrow)
+        expect(qlHistory.quotaCyclesWindow == qlHeldWindow && qlHistory.quotaCurveUnreadable,
+               "QL-history a failed read on the SAME window keeps it, and says the read failed")
+        qlHistory.refreshQuotaHalves(
+            qlInputs(clients: ["grok"], usageClient: "grok"), readCurve: qlThrow)
+        expect(qlHistory.quotaCyclesWindow == nil && qlHistory.quotaCycles.isEmpty
+                   && qlHistory.quotaCurveUnreadable,
+               "QL-history a failed read on ANOTHER tab clears what the first tab held")
 
         // MS-MISS. The join finding nothing is reported, not drawn as an idle
         // week. Empty bars under a moving curve state that the user did no
@@ -14342,11 +14482,21 @@ enum SelfTest {
         let m3gExtra = AccountIdentity(
             clientId: "claude", accountKey: "/Users/someone/.claude-work")
         expect(
-            m3gPrimary.windowKey(cardId: "session.v1") == "claude|session.v1",
+            m3gPrimary.window("session.v1").key == "claude|session.v1",
             "M3-g the primary's window key keeps the two-part shape everything already stores")
         expect(
-            m3gExtra.windowKey(cardId: "session.v1") != m3gPrimary.windowKey(cardId: "session.v1"),
+            m3gPrimary.window("session.v1").key
+                == QuotaResolver.selection(clientId: "claude", cardId: "session.v1"),
+            "M3-g and that shape is the persisted selection, so a stored pick still resolves")
+        expect(
+            m3gExtra.window("session.v1") != m3gPrimary.window("session.v1")
+                && m3gExtra.window("session.v1").key != m3gPrimary.window("session.v1").key,
             "M3-g two accounts offering the same window collapse onto one key")
+        expect(
+            m3gPrimary.displayName == ClientRegistry.style("claude").displayName
+                && m3gExtra.displayName
+                    == "\(ClientRegistry.style("claude").displayName) .claude-work",
+            "M3-g a subscription's name is the client's, qualified only for an extra account")
 
         let m3gSummaries = QuotaOverviewFold.summaries(windows: [
             (clientId: "claude", accountKey: nil, cardId: "session.v1", label: "Session",

@@ -34,6 +34,7 @@ sources: ["README.md", "CONTRIBUTING.md", "AGENTS.md", "Makefile", "Package.swif
 | 任務 | 先讀 | 接著讀 |
 |---|---|---|
 | 架構、FFI、資料流 | [`architecture.md`](architecture.md) | [`verification.md`](verification.md) |
+| Quota 名詞、window identity、新 module 命名 | [`glossary.md`](glossary.md) | [`architecture.md`](architecture.md) |
 | 分支、PR、merge、授權 | [`workflow.md`](workflow.md) | [`communication.md`](communication.md) |
 | 測試、fixture、cache、跨語言契約 | [`verification.md`](verification.md) | [`architecture.md`](architecture.md) |
 | 效能／正確性 before-after 量測、對拍 oracle | [`measurement.md`](measurement.md) | [`history/dashboard-load-performance.md`](history/dashboard-load-performance.md) |
@@ -56,6 +57,7 @@ landing/AGENTS.md
 docs/knowledge/
 ├── README.md
 ├── architecture.md
+├── glossary.md
 ├── workflow.md
 ├── verification.md
 ├── measurement.md

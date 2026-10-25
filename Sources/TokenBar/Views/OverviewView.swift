@@ -35,7 +35,7 @@ struct OverviewView: View {
     /// sparkline and recent-consumption indicator. Both tabs: the client tab
     /// draws the same card, and an empty map here silently blanks the indicator
     /// rather than saving anything.
-    var windowCurves: [String: [QuotaSample]] = [:]
+    var windowCurves: [QuotaWindowRef: [QuotaSample]] = [:]
     var agentUsage: AgentUsagePayload?
 
     @AppStorage(OverviewCard.hiddenKey) private var hiddenCardsRaw = ""
