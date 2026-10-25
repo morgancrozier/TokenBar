@@ -3930,7 +3930,56 @@ fn load_claude_credentials_from_keychain() -> Result<Option<String>, String> {
 fn load_claude_credentials_from_keychain_for(
     config_dir: Option<&str>,
 ) -> Result<Option<String>, String> {
-    load_claude_credentials_from_keychain_item(&claude_keychain_service(config_dir), None)
+    let service = claude_keychain_service(config_dir);
+    claude_keychain_item_with(claude_keychain_owner().as_deref(), |account| {
+        load_claude_credentials_from_keychain_item(&service, account)
+    })
+    .map(|item| item.map(|(_, raw)| raw))
+}
+
+/// The account Claude Code files its own Keychain item under: the login name.
+///
+/// A service can hold more than one item. A `Claude Code-credentials` item
+/// filed under `unknown` was observed beside the login name's own, holding
+/// only `mcpOAuth`, and an unqualified `find-generic-password` returned it
+/// first — so a fresh `claude` login was reported as "credentials not found".
+fn claude_keychain_owner() -> Option<String> {
+    claude_keychain_owner_from(|key| std::env::var(key).ok())
+}
+
+fn claude_keychain_owner_from(lookup: impl Fn(&str) -> Option<String>) -> Option<String> {
+    ["USER", "LOGNAME"].iter().find_map(|key| {
+        lookup(key)
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    })
+}
+
+/// Which of a service's items to read, and the account it is filed under.
+///
+/// The owner's item is authoritative whenever it exists, whatever it holds:
+/// it is the item Claude Code itself reads. An owner item with no
+/// `claudeAiOauth` is a logout, and falling through to another item's login
+/// would resume a stale token the user signed out of — the same reason a
+/// login-free Keychain item does not fall through to the file. Only when the
+/// owner has no item at all does the unqualified first match stand, which is
+/// the lookup this replaced.
+///
+/// `item(None)` is the unqualified lookup. Its account is not known here; a
+/// write-back resolves it separately through `claude_keychain_account_with`.
+fn claude_keychain_item_with<Item>(
+    owner: Option<&str>,
+    mut item: Item,
+) -> Result<Option<(Option<String>, String)>, String>
+where
+    Item: FnMut(Option<&str>) -> Result<Option<String>, String>,
+{
+    if let Some(owner) = owner {
+        if let Some(raw) = item(Some(owner))? {
+            return Ok(Some((Some(owner.to_string()), raw)));
+        }
+    }
+    Ok(item(None)?.map(|raw| (None, raw)))
 }
 
 #[cfg(target_os = "macos")]
@@ -4943,10 +4992,48 @@ fn save_claude_credentials_to_keychain(
     Err(RefreshTargetError::TargetUnverified)
 }
 
-/// Read the account name `service`'s Claude Keychain item is stored under so
-/// the write-back updates that same item instead of creating a duplicate.
+/// The account of the item `load_claude_credentials_from_keychain_for` reads,
+/// so a refresh reloads, and the write-back updates, that same item instead of
+/// another one sharing its service or a new duplicate.
 #[cfg(target_os = "macos")]
 fn claude_keychain_account(service: &str) -> Option<String> {
+    claude_keychain_account_with(
+        claude_keychain_owner().as_deref(),
+        |owner| claude_keychain_item_exists(service, owner),
+        || claude_keychain_first_account(service),
+    )
+}
+
+/// Same rule as `claude_keychain_item_with`: the owner's item when it exists,
+/// otherwise whichever item the unqualified lookup returns first.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn claude_keychain_account_with<Exists, First>(
+    owner: Option<&str>,
+    owner_item_exists: Exists,
+    first_account: First,
+) -> Option<String>
+where
+    Exists: FnOnce(&str) -> bool,
+    First: FnOnce() -> Option<String>,
+{
+    match owner {
+        Some(owner) if owner_item_exists(owner) => Some(owner.to_string()),
+        _ => first_account(),
+    }
+}
+
+/// Attributes only: without `-w` no secret is read, so this cannot prompt.
+#[cfg(target_os = "macos")]
+fn claude_keychain_item_exists(service: &str, account: &str) -> bool {
+    std::process::Command::new("/usr/bin/security")
+        .args(["find-generic-password", "-s", service, "-a", account])
+        .output()
+        .is_ok_and(|output| output.status.success())
+}
+
+/// Read the account name of the first item the unqualified lookup returns.
+#[cfg(target_os = "macos")]
+fn claude_keychain_first_account(service: &str) -> Option<String> {
     let output = std::process::Command::new("/usr/bin/security")
         .args(["find-generic-password", "-s", service])
         .output()
@@ -7241,6 +7328,173 @@ mod tests {
         );
         assert!(matches!(login, ClaudeLoginResolution::Absent));
         assert_eq!(file_loads.get(), 0);
+    }
+
+    /// Two `Claude Code-credentials` items in one service, as observed: one
+    /// filed under `unknown` holding only `mcpOAuth`, which the unqualified
+    /// lookup returns first, and the login name's own holding the fresh
+    /// `claude` login. Keyed (account) -> raw; `None` is the unqualified
+    /// lookup, which returns the stale item.
+    fn claude_two_item_keychain() -> (String, std::collections::HashMap<&'static str, String>) {
+        let login = serde_json::json!({
+            "claudeAiOauth": {
+                "accessToken": "owner-access",
+                "refreshToken": "owner-refresh",
+                "expiresAt": 0
+            },
+            "mcpOAuth": {"some-server": {"accessToken": "mcp-a"}}
+        })
+        .to_string();
+        let items = std::collections::HashMap::from([
+            ("unknown", MCP_OAUTH_ONLY_STORE.to_string()),
+            ("morgan", login.clone()),
+        ]);
+        (login, items)
+    }
+
+    /// The reported failure: a fresh login filed under the login name was
+    /// reported as "credentials not found" because the unqualified lookup
+    /// returned the other item. Reading the owner's item finds the login.
+    #[test]
+    fn claude_keychain_reads_the_owners_item_when_two_share_a_service() {
+        let (login, items) = claude_two_item_keychain();
+        let item = |account: Option<&str>| -> Result<Option<String>, String> {
+            Ok(Some(items[account.unwrap_or("unknown")].clone()))
+        };
+
+        let selected = claude_keychain_item_with(Some("morgan"), item).unwrap();
+        assert_eq!(selected, Some((Some("morgan".to_string()), login.clone())));
+        let resolved = load_stored_claude_login_with(
+            || Ok(selected.map(|(_, raw)| raw)),
+            || Ok(None),
+        );
+        assert!(matches!(resolved, ClaudeLoginResolution::Ready(_)));
+
+        // The lookup this replaced: no owner, so the first match decides, and
+        // the login is invisible.
+        let unqualified = claude_keychain_item_with(None, item).unwrap();
+        let resolved = load_stored_claude_login_with(
+            || Ok(unqualified.map(|(_, raw)| raw)),
+            || Ok(None),
+        );
+        assert!(matches!(resolved, ClaudeLoginResolution::Absent));
+    }
+
+    /// The write-back half of the same failure. A refresh reloads, and later
+    /// writes, the item under the account `claude_keychain_account` names.
+    /// Naming the first match's account (`unknown`) reloads the login-free
+    /// item and the refresh fails; naming the owner's rotates the login.
+    #[test]
+    fn claude_keychain_refresh_reloads_and_targets_the_owners_item() {
+        let (login, items) = claude_two_item_keychain();
+        let original = parse_claude_credentials_data(&login, ClaudeCredentialSource::Keychain)
+            .unwrap();
+        let item = |service: &str, account: &str| -> Result<Option<String>, String> {
+            assert_eq!(service, CLAUDE_KEYCHAIN_SERVICE);
+            Ok(items.get(account).cloned())
+        };
+
+        let reloaded = reload_claude_keychain_credentials_with(
+            &original,
+            |_service| {
+                claude_keychain_account_with(
+                    Some("morgan"),
+                    |owner| items.contains_key(owner),
+                    || Some("unknown".to_string()),
+                )
+            },
+            item,
+        )
+        .unwrap();
+        assert_eq!(reloaded.keychain_account.as_deref(), Some("morgan"));
+        assert_eq!(reloaded.access_token, "owner-access");
+
+        let first_match = reload_claude_keychain_credentials_with(
+            &original,
+            |_service| Some("unknown".to_string()),
+            item,
+        );
+        assert!(first_match.is_err());
+    }
+
+    /// The owner's item decides whenever it exists. One with no
+    /// `claudeAiOauth` is a logout, and falling through to another item's
+    /// login would resume a token the user signed out of.
+    #[test]
+    fn claude_keychain_owner_item_without_a_login_does_not_fall_through() {
+        let stale_login = r#"{"claudeAiOauth":{"accessToken":"stale","refreshToken":"stale-r"}}"#;
+        let unqualified_reads = std::cell::Cell::new(0);
+        let selected = claude_keychain_item_with(Some("morgan"), |account| {
+            if account.is_none() {
+                unqualified_reads.set(unqualified_reads.get() + 1);
+                return Ok(Some(stale_login.to_string()));
+            }
+            Ok(Some(MCP_OAUTH_ONLY_STORE.to_string()))
+        })
+        .unwrap();
+        assert_eq!(unqualified_reads.get(), 0);
+        let resolved = load_stored_claude_login_with(
+            || Ok(selected.map(|(_, raw)| raw)),
+            || Ok(None),
+        );
+        assert!(matches!(resolved, ClaudeLoginResolution::Absent));
+
+        assert_eq!(
+            claude_keychain_account_with(Some("morgan"), |_| true, || Some("unknown".into())),
+            Some("morgan".to_string()),
+        );
+    }
+
+    /// No owner item, or no owner name at all: the unqualified first match
+    /// stands, for reading and for the write-back account alike.
+    #[test]
+    fn claude_keychain_without_an_owner_item_keeps_the_first_match() {
+        let selected = claude_keychain_item_with(Some("morgan"), |account| {
+            Ok(account.is_none().then(|| MCP_OAUTH_ONLY_STORE.to_string()))
+        })
+        .unwrap();
+        assert_eq!(selected, Some((None, MCP_OAUTH_ONLY_STORE.to_string())));
+        assert_eq!(
+            claude_keychain_account_with(Some("morgan"), |_| false, || Some("first".into())),
+            Some("first".to_string()),
+        );
+        assert_eq!(
+            claude_keychain_account_with(None, |_| unreachable!(), || Some("first".into())),
+            Some("first".to_string()),
+        );
+    }
+
+    /// A failed read of the owner's item fails closed. Answering from the
+    /// unqualified lookup instead would read a different item than the one a
+    /// refresh then writes back to.
+    #[test]
+    fn claude_keychain_owner_read_failure_does_not_consult_the_first_match() {
+        let result = claude_keychain_item_with(Some("morgan"), |account| match account {
+            Some(_) => Err("denied".to_string()),
+            None => panic!("the unqualified lookup must not be reached"),
+        });
+        assert_eq!(result, Err("denied".to_string()));
+    }
+
+    #[test]
+    fn claude_keychain_owner_is_the_login_name() {
+        let env = |pairs: &'static [(&'static str, &'static str)]| {
+            move |key: &str| {
+                pairs
+                    .iter()
+                    .find(|(name, _)| *name == key)
+                    .map(|(_, value)| value.to_string())
+            }
+        };
+        assert_eq!(
+            claude_keychain_owner_from(env(&[("USER", "morgan"), ("LOGNAME", "other")])),
+            Some("morgan".to_string()),
+        );
+        assert_eq!(
+            claude_keychain_owner_from(env(&[("USER", "  "), ("LOGNAME", "morgan")])),
+            Some("morgan".to_string()),
+        );
+        assert_eq!(claude_keychain_owner_from(env(&[])), None);
     }
 
     /// Issue #219: an mcpOAuth-only `Claude Code-credentials` item used to
